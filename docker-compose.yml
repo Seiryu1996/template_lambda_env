@@ -1,0 +1,33 @@
+
+services:
+  # Development environment with Go tools
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - go-mod-cache:/go/pkg/mod
+    working_dir: /app
+    environment:
+      - GO111MODULE=on
+      - CGO_ENABLED=0
+    env_file:
+      - .env
+    command: tail -f /dev/null
+
+  # SAM CLI environment
+  sam:
+    image: public.ecr.aws/sam/build-provided.al2:latest-x86_64
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sam-cache:/tmp
+    working_dir: /app
+    env_file:
+      - .env
+    command: tail -f /dev/null
+
+volumes:
+  go-mod-cache:
+  sam-cache:

@@ -1,0 +1,32 @@
+FROM golang:1.23-alpine
+
+# Install development tools
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata \
+    curl \
+    make \
+    zip \
+    unzip \
+    python3 \
+    py3-pip \
+    nodejs \
+    npm \
+    py3-virtualenv \
+    && pip3 install --break-system-packages awscli
+
+# Install SAM CLI
+RUN pip3 install --break-system-packages aws-sam-cli
+
+# Set working directory
+WORKDIR /app
+
+# Install Go tools (using compatible versions)
+RUN go install golang.org/x/tools/gopls@v0.16.1 && \
+    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
+    go install honnef.co/go/tools/cmd/staticcheck@latest
+
+# Set Go environment
+ENV GO111MODULE=on
+ENV CGO_ENABLED=0

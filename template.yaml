@@ -1,0 +1,245 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Weather Lambda Function
+  
+  SAM template for Go-based Lambda function that stores weather data to S3 and DynamoDB
+
+# Global configurations
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: provided.al2
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        S3_BUCKET: !Ref WeatherDataBucket
+        DYNAMODB_TABLE: !Ref WeatherRecordsTable
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  WeatherAPIKey:
+    Type: String
+    NoEcho: true
+    Description: OpenWeatherMap API Key
+    
+  CityName:
+    Type: String
+    Default: Tokyo
+    Description: City name for weather data
+
+Resources:
+  # Lambda Function
+  WeatherLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: bin/
+      Handler: bootstrap
+      Environment:
+        Variables:
+          WEATHER_API_KEY: !Ref WeatherAPIKey
+          CITY_NAME: !Ref CityName
+          ENVIRONMENT: !Ref Environment
+      Events:
+        ScheduledEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour) # Run every hour
+            Description: "Scheduled execution for weather data collection"
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref WeatherDataBucket
+        - DynamoDBWritePolicy:
+            TableName: !Ref WeatherRecordsTable
+
+  # Weather History API Lambda Function
+  WeatherHistoryApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: bin-history/
+      Handler: bootstrap
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          CITY_NAME: !Ref CityName
+          ENVIRONMENT: !Ref Environment
+      Events:
+        WeatherHistoryApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref WeatherHistoryApi
+            Path: /weather/history
+            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref WeatherRecordsTable
+
+  # API Gateway for Weather History
+  WeatherHistoryApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Description: Weather History API
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      DefinitionBody:
+        openapi: 3.0.0
+        info:
+          title: Weather History API
+          version: 1.0.0
+        paths:
+          /weather/history:
+            get:
+              summary: Get weather history for a city
+              parameters:
+                - name: period
+                  in: query
+                  description: Time period (6h, 24h, or number of hours 1-168)
+                  required: false
+                  schema:
+                    type: string
+                    default: "6h"
+                - name: city
+                  in: query
+                  description: City name
+                  required: false
+                  schema:
+                    type: string
+              responses:
+                '200':
+                  description: Weather history data
+                  content:
+                    application/json:
+                      schema:
+                        type: object
+                        properties:
+                          statusCode:
+                            type: integer
+                          message:
+                            type: string
+                          data:
+                            type: array
+                            items:
+                              type: object
+                          count:
+                            type: integer
+                          period:
+                            type: string
+                          startTime:
+                            type: string
+                          endTime:
+                            type: string
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WeatherHistoryApiFunction.Arn}/invocations'
+            options:
+              responses:
+                '200':
+                  description: CORS response
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Methods:
+                      schema:
+                        type: string
+                    Access-Control-Allow-Headers:
+                      schema:
+                        type: string
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                      method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+
+  # S3 Bucket for weather data storage
+  WeatherDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-weather-data-${Environment}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # DynamoDB Table for weather records
+  WeatherRecordsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-weather-records-${Environment}"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  # CloudWatch Log Group
+  WeatherLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${WeatherLambdaFunction}"
+      RetentionInDays: 7
+
+# Outputs
+Outputs:
+  WeatherLambdaFunction:
+    Description: "Weather Lambda Function ARN"
+    Value: !GetAtt WeatherLambdaFunction.Arn
+  
+  WeatherDataBucket:
+    Description: "S3 Bucket for weather data"
+    Value: !Ref WeatherDataBucket
+  
+  WeatherRecordsTable:
+    Description: "DynamoDB table for weather records"
+    Value: !Ref WeatherRecordsTable
+  
+  WeatherLambdaLogGroup:
+    Description: "CloudWatch Log Group"
+    Value: !Ref WeatherLambdaLogGroup
+  
+  WeatherHistoryApiFunction:
+    Description: "Weather History API Lambda Function ARN"
+    Value: !GetAtt WeatherHistoryApiFunction.Arn
+  
+  WeatherHistoryApiUrl:
+    Description: "Weather History API Gateway URL"
+    Value: !Sub "https://${WeatherHistoryApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/weather/history"
