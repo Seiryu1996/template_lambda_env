@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -13,9 +15,9 @@ import (
 	"github.com/weather-lambda/internal/services"
 )
 
-// Event represents the input to the Lambda function
-type Event struct {
-	Detail string `json:"detail,omitempty"`
+// WeatherEvent represents a custom detail for weather collection
+type WeatherEvent struct {
+	Action string `json:"action,omitempty"`
 }
 
 // Response represents the output from the Lambda function
@@ -77,8 +79,19 @@ func NewHandler() (*Handler, error) {
 }
 
 // HandleRequest handles the Lambda function request
-func (h *Handler) HandleRequest(ctx context.Context, event Event) (*Response, error) {
+// Accepts both EventBridge CloudWatch Events and direct invocations
+func (h *Handler) HandleRequest(ctx context.Context, event json.RawMessage) (*Response, error) {
 	log.Printf("Processing weather data collection for city: %s", h.config.Weather.CityName)
+	
+	// Try to parse as CloudWatch Event first
+	var cloudWatchEvent events.CloudWatchEvent
+	if err := json.Unmarshal(event, &cloudWatchEvent); err == nil && cloudWatchEvent.Source != "" {
+		log.Printf("Received EventBridge event from source: %s", cloudWatchEvent.Source)
+		// EventBridge event - continue with weather collection
+	} else {
+		// Might be direct invocation or other event type
+		log.Printf("Received direct invocation or unknown event type")
+	}
 
 	// Fetch weather data from API
 	weatherResponse, err := h.weatherService.GetWeatherData()

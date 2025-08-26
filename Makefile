@@ -97,11 +97,19 @@ sam-build: build-all ## Build with SAM
 
 sam-invoke-aws: ## Invoke deployed Lambda function in AWS
 	@echo "Invoking deployed Lambda function..."
-	@$(DOCKER_COMPOSE) exec dev bash -c "aws lambda invoke --function-name $$(aws cloudformation describe-stacks --stack-name $${STACK_NAME:-weather-lambda-dev} --region $${AWS_REGION:-ap-northeast-1} --query 'Stacks[0].Outputs[?OutputKey==\`WeatherLambdaFunction\`].OutputValue' --output text) --region $${AWS_REGION:-ap-northeast-1} response.json && cat response.json"
+	@$(DOCKER_COMPOSE) exec dev sh -c "FUNC_ARN=$$(/usr/bin/aws cloudformation describe-stacks --stack-name $${STACK_NAME:-weather-lambda-dev} --region $${AWS_REGION:-ap-northeast-1} --query 'Stacks[0].Outputs[?OutputKey==\`WeatherLambdaFunction\`].OutputValue' --output text) && echo \"Function ARN: \$$FUNC_ARN\" && /usr/bin/aws lambda invoke --region $${AWS_REGION:-ap-northeast-1} --function-name \"\$$FUNC_ARN\" response.json && cat response.json"
 
 test-history-api: ## Test the Weather History API endpoint
 	@echo "Testing Weather History API..."
-	@$(DOCKER_COMPOSE) exec dev bash -c "API_URL=$$(aws cloudformation describe-stacks --stack-name $${STACK_NAME:-weather-lambda-dev} --region $${AWS_REGION:-ap-northeast-1} --query 'Stacks[0].Outputs[?OutputKey==\`WeatherHistoryApiUrl\`].OutputValue' --output text) && echo \"API URL: \$$API_URL\" && curl -s \"\$$API_URL?period=6h\" | jq ."
+	@$(DOCKER_COMPOSE) exec dev sh -c "curl -s 'https://gdsfuvwsae.execute-api.ap-northeast-1.amazonaws.com/dev/weather/history?period=6h'"
+
+test-aws-cli: ## Test AWS CLI in container
+	@echo "Testing AWS CLI..."
+	@$(DOCKER_COMPOSE) exec dev sh -c "/usr/bin/aws --version && /usr/bin/aws sts get-caller-identity --region ap-northeast-1"
+
+test-lambda-direct: ## Test Lambda function using known function name
+	@echo "Testing Lambda function directly..."
+	@$(DOCKER_COMPOSE) exec dev sh -c "/usr/bin/aws lambda invoke --region ap-northeast-1 --function-name weather-lambda-dev-WeatherLambdaFunction-1HqVODG3zZRh response.json && cat response.json"
 
 sam-deploy: sam-build ## Deploy to AWS (guided)
 	@echo "Deploying to AWS with guided setup..."
@@ -110,13 +118,13 @@ sam-deploy: sam-build ## Deploy to AWS (guided)
 sam-deploy-dev: sam-build ## Deploy to development (requires WEATHER_API_KEY env var)
 	@echo "Deploying to development environment..."
 	@./scripts/validate-env.sh
-	@$(DOCKER_COMPOSE) exec dev sam deploy \
-		--region $${AWS_REGION:-ap-northeast-1} \
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && sam deploy \
+		--region \$$AWS_REGION \
 		--resolve-s3 \
 		--stack-name weather-lambda-dev \
-		--parameter-overrides WeatherAPIKey="$$WEATHER_API_KEY" CityName="$${CITY_NAME:-Tokyo}" Environment=dev \
+		--parameter-overrides WeatherAPIKey=\"\$$WEATHER_API_KEY\" CityName=\"\$$CITY_NAME\" Environment=dev \
 		--capabilities CAPABILITY_IAM \
-		--no-confirm-changeset
+		--no-confirm-changeset"
 
 sam-deploy-prod: sam-build ## Deploy to production (requires WEATHER_API_KEY env var)
 	@echo "Deploying to production..."
