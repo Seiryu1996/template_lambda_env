@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -74,16 +76,38 @@ func (h *Handler) HandleRequest(ctx context.Context, request events.APIGatewayPr
 		}, nil
 	}
 
-	// Parse query parameters
+	// Security validation: Check for API key presence (API Gateway handles validation)
+	if request.Headers["X-API-Key"] == "" && request.Headers["x-api-key"] == "" {
+		log.Printf("Missing API key in request")
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    headers,
+			Body:       `{"error": "API key required"}`,
+		}, nil
+	}
+
+	// Input sanitization and validation
 	period := request.QueryStringParameters["period"]
 	if period == "" {
 		period = "6h" // Default to 6 hours
+	}
+	
+	// Validate period parameter to prevent injection
+	if !isValidPeriod(period) {
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusBadRequest,
+			Headers:    headers,
+			Body:       `{"error": "Invalid period parameter"}`,
+		}, nil
 	}
 
 	city := request.QueryStringParameters["city"]
 	if city == "" {
 		city = h.config.Weather.CityName // Use default city from config
 	}
+	
+	// Sanitize city name to prevent injection
+	city = sanitizeCityName(city)
 
 	var records []models.WeatherRecord
 	var err error
@@ -147,6 +171,24 @@ func (h *Handler) HandleRequest(ctx context.Context, request events.APIGatewayPr
 		Headers:    headers,
 		Body:       string(responseBody),
 	}, nil
+}
+
+// isValidPeriod validates the period parameter to prevent injection attacks
+func isValidPeriod(period string) bool {
+	// Allow specific formats: 6h, 24h, 1d, or numbers 1-168
+	matched, _ := regexp.MatchString(`^(6h|24h|1d|[1-9]|[1-9][0-9]|1[0-6][0-8])$`, period)
+	return matched
+}
+
+// sanitizeCityName sanitizes city name input to prevent injection
+func sanitizeCityName(city string) string {
+	// Remove potential harmful characters and limit length
+	city = strings.TrimSpace(city)
+	city = regexp.MustCompile(`[^a-zA-Z\s\-]`).ReplaceAllString(city, "")
+	if len(city) > 50 {
+		city = city[:50]
+	}
+	return city
 }
 
 func main() {

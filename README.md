@@ -72,6 +72,13 @@ DYNAMODB_TABLE=weather-records
 # Weather API Configuration
 WEATHER_API_KEY=your_weather_api_key_here
 CITY_NAME=Tokyo
+
+# API Gateway Configuration (set after deployment)
+STACK_NAME=weather-lambda-dev
+API_GATEWAY_URL=https://your-api-gateway-url
+API_KEY_ID=your-api-key-id
+API_KEY_VALUE=your-api-key-value
+USAGE_PLAN_ID=your-usage-plan-id
 ```
 
 ### 2. Development Environment
@@ -182,7 +189,11 @@ make docker-stop             # Stop all Docker services
 make test                    # Run Go unit tests
 make test-aws                # Run integration tests against AWS resources (requires deployment)
 make test-lambda-direct      # Test Weather Collection Lambda using known function name
-make test-history-api        # Test Weather History API endpoint (6h period)
+make test-history-api        # Test Weather History API endpoint with API key authentication
+make test-history-api-no-auth # Test API without authentication (should return 403)
+make test-rate-limiting      # Test API rate limiting with multiple requests
+make get-api-key             # Retrieve API key information from environment
+make monitor-api-usage       # Monitor API Gateway usage statistics
 make test-aws-cli            # Verify AWS CLI connectivity in container
 make lint                    # Run golangci-lint for code quality
 make fmt                     # Format Go code
@@ -265,6 +276,34 @@ make sam-deploy-dev          # Development deployment
 make sam-deploy-prod         # Production deployment
 ```
 
+### Post-Deployment Configuration
+
+After successful deployment, update your `.env` file with the generated API Gateway information:
+
+```bash
+# 1. Get deployment outputs
+aws cloudformation describe-stacks --stack-name weather-lambda-dev --region ap-northeast-1 \
+  --query 'Stacks[0].Outputs' --output table
+
+# 2. Update .env file with actual values
+# API_GATEWAY_URL=https://your-actual-api-url
+# API_KEY_ID=your-actual-api-key-id
+# API_KEY_VALUE=your-actual-api-key-value
+# USAGE_PLAN_ID=your-actual-usage-plan-id
+
+# 3. Test the deployment
+make test-history-api
+make test-history-api-no-auth
+```
+
+### Automated Post-Deployment Setup
+```bash
+# Complete deployment with automatic environment update
+make sam-deploy-dev
+make get-api-key              # Verify API key information
+make test-history-api         # Test authenticated access
+```
+
 ## 📊 Monitoring and Logs
 
 ### CloudWatch Logs
@@ -331,9 +370,17 @@ aws lambda invoke --function-name [FUNCTION-NAME] response.json && cat response.
 ## 🌤️ Weather History API
 
 ### API Endpoint
+**⚠️ API Key Authentication Required**
 ```
-https://gdsfuvwsae.execute-api.ap-northeast-1.amazonaws.com/dev/weather/history
+https://your-api-gateway-url/weather/history
 ```
+> **Note**: Replace `your-api-gateway-url` with your actual API Gateway URL from deployment outputs
+
+### API Authentication
+The Weather History API requires API Key authentication for all requests:
+- **Header**: `X-API-Key: your-api-key-value`
+- **Rate Limits**: 1000 requests per day, 10 requests/second, 50 burst limit
+- **Monitoring**: Usage statistics available through AWS CloudWatch
 
 ### Supported Query Parameters
 
@@ -345,19 +392,32 @@ https://gdsfuvwsae.execute-api.ap-northeast-1.amazonaws.com/dev/weather/history
 ### Usage Examples
 
 ```bash
-# Using Makefile (recommended)
-make test-history-api                    # Test with default settings (6h)
+# Using Makefile (recommended - includes API key authentication)
+make test-history-api                    # Test with API key authentication (6h period)
+make test-history-api-no-auth           # Test without API key (should return 403)
+make test-rate-limiting                 # Test rate limiting with multiple requests
 
-# Direct API calls
-curl -s "API_URL?period=6h"              # Last 6 hours
-curl -s "API_URL?period=24h"             # Last 24 hours 
-curl -s "API_URL?period=1d"              # Last 1 day (same as 24h)
-curl -s "API_URL?period=12"              # Last 12 hours (custom)
-curl -s "API_URL?period=6h&city=Tokyo"   # Last 6 hours for Tokyo
+# Get API information from environment
+make get-api-key                        # Display API key information
+make monitor-api-usage                  # View API usage statistics
 
-# Get API URL dynamically (for scripting)
+# Direct API calls with authentication
+API_URL="https://your-api-gateway-url"
+API_KEY="your-api-key-value"
+
+curl -s -H "X-API-Key: $API_KEY" "$API_URL/weather/history?period=6h"              # Last 6 hours
+curl -s -H "X-API-Key: $API_KEY" "$API_URL/weather/history?period=24h"             # Last 24 hours 
+curl -s -H "X-API-Key: $API_KEY" "$API_URL/weather/history?period=1d"              # Last 1 day (same as 24h)
+curl -s -H "X-API-Key: $API_KEY" "$API_URL/weather/history?period=12"              # Last 12 hours (custom)
+curl -s -H "X-API-Key: $API_KEY" "$API_URL/weather/history?period=6h&city=Tokyo"   # Last 6 hours for Tokyo
+
+# Without API key (will return 403 Forbidden)
+curl -s "$API_URL/weather/history?period=6h"
+
+# Get API URL and Key dynamically from CloudFormation (for scripting)
 API_URL=$(aws cloudformation describe-stacks --stack-name weather-lambda-dev --region ap-northeast-1 --query 'Stacks[0].Outputs[?OutputKey==`WeatherHistoryApiUrl`].OutputValue' --output text)
-curl -s "$API_URL?period=6h"
+API_KEY=$(aws cloudformation describe-stacks --stack-name weather-lambda-dev --region ap-northeast-1 --query 'Stacks[0].Outputs[?OutputKey==`WeatherHistoryApiKey`].OutputValue' --output text)
+curl -s -H "X-API-Key: $API_KEY" "$API_URL?period=6h"
 ```
 
 ### CORS Support
@@ -469,11 +529,53 @@ s3://bucket-name/weather-data/2024/01-15/Tokyo-1705123456.json
 
 ## 🛡️ Security
 
-- Environment variables are used for sensitive data
-- IAM roles with least privilege access
-- S3 bucket encryption enabled
-- No hardcoded credentials in code
-- Security scanning with `make lint`
+### API Gateway Security Features
+- **API Key Authentication**: All Weather History API endpoints require valid API keys
+- **Rate Limiting**: 1000 requests/day, 10 requests/second, 50 burst limit per API key
+- **Usage Monitoring**: Real-time monitoring and alerts through AWS CloudWatch
+- **CORS Configuration**: Secure cross-origin request handling with proper headers
+- **Input Validation**: Server-side validation and sanitization of all query parameters
+
+### Infrastructure Security
+- **IAM Roles**: Least privilege access policies for Lambda functions
+- **Environment Variables**: Sensitive data stored securely in environment variables
+- **S3 Encryption**: Server-side encryption (AES256) for all stored weather data
+- **DynamoDB Security**: Secure access patterns with IAM policies
+- **VPC Configuration**: Optional VPC deployment for network isolation
+- **No Hardcoded Secrets**: All credentials managed through AWS parameter store
+
+### Deployment Security
+- **Environment-based Configuration**: Separate configurations for dev/staging/prod
+- **Secure Parameter Handling**: API keys and credentials passed through secure channels
+- **CloudFormation Stack Outputs**: Sensitive information properly masked in outputs
+- **Access Logging**: API Gateway access logging for security auditing
+
+### Development Security
+- **Code Scanning**: Integrated security scanning with `make lint`
+- **Dependency Management**: Regular dependency updates and security vulnerability checks
+- **Docker Security**: Multi-stage builds with minimal attack surface
+- **Git Security**: No sensitive data committed to version control
+
+### API Key Management
+```bash
+# Retrieve API key information (masked output)
+make get-api-key
+
+# Monitor API usage and detect anomalies
+make monitor-api-usage
+
+# Test security controls
+make test-history-api-no-auth           # Should return 403 Forbidden
+make test-rate-limiting                 # Test rate limiting enforcement
+```
+
+### Security Best Practices
+1. **Rotate API Keys**: Regularly rotate API keys using AWS API Gateway console
+2. **Monitor Usage**: Set up CloudWatch alarms for unusual API usage patterns
+3. **Implement Client-side Controls**: Add client-side rate limiting and error handling
+4. **Use HTTPS Only**: All API calls must use HTTPS (enforced by API Gateway)
+5. **Validate Inputs**: Always validate and sanitize inputs on both client and server side
+6. **Audit Logs**: Regular review of CloudWatch logs for suspicious activities
 
 ## 🚨 Troubleshooting
 
@@ -565,6 +667,22 @@ aws apigateway get-usage --usage-plan-id YOUR_USAGE_PLAN_ID --key-id YOUR_API_KE
 - [AWS EventBridge](https://docs.aws.amazon.com/eventbridge/)
 
 ## 📋 Release Notes
+
+### v1.2.0 (2025-08-26)
+**Security & Environment Management:**
+- ✅ **API Key Authentication**: Complete API key authentication system with rate limiting
+- ✅ **Environment Variables**: All API keys and IDs moved to environment variables (no hardcoding)
+- ✅ **Rate Limiting**: 1000/day, 10/second, 50 burst limit enforcement
+- ✅ **Usage Monitoring**: API Gateway usage statistics and monitoring
+- ✅ **Security Testing**: Comprehensive security test suite with Makefile commands
+- ✅ **Documentation Updates**: Complete security and API authentication documentation
+
+**New Testing Commands:**
+- ✅ `make test-history-api`: Test with API key authentication
+- ✅ `make test-history-api-no-auth`: Verify 403 without authentication  
+- ✅ `make test-rate-limiting`: Test rate limiting enforcement
+- ✅ `make get-api-key`: Retrieve API key information from environment
+- ✅ `make monitor-api-usage`: Monitor API usage statistics
 
 ### v1.1.0 (2025-08-26)
 **Major Features:**

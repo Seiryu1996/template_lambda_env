@@ -81,6 +81,8 @@ Resources:
             RestApiId: !Ref WeatherHistoryApi
             Path: /weather/history
             Method: GET
+            Auth:
+              ApiKeyRequired: true
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref WeatherRecordsTable
@@ -91,6 +93,20 @@ Resources:
     Properties:
       StageName: !Ref Environment
       Description: Weather History API
+      Auth:
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          Description: Weather History API Usage Plan
+          Quota:
+            Limit: 1000
+            Period: DAY
+          Throttle:
+            RateLimit: 10
+            BurstLimit: 50
+          Tags:
+            - Key: Environment
+              Value: !Ref Environment
       Cors:
         AllowMethods: "'GET,OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
@@ -241,5 +257,13 @@ Outputs:
     Value: !GetAtt WeatherHistoryApiFunction.Arn
   
   WeatherHistoryApiUrl:
-    Description: "Weather History API Gateway URL"
+    Description: "Weather History API Gateway URL (requires X-API-Key header)"
     Value: !Sub "https://${WeatherHistoryApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/weather/history"
+  
+  WeatherHistoryApiKey:
+    Description: "API Key for Weather History API (keep secure!)"
+    Value: !Ref WeatherHistoryApiApiKey
+  
+  WeatherHistoryUsagePlan:
+    Description: "Usage Plan ID for monitoring and management"
+    Value: !Ref WeatherHistoryApiUsagePlan

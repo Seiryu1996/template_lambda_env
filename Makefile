@@ -97,19 +97,43 @@ sam-build: build-all ## Build with SAM
 
 sam-invoke-aws: ## Invoke deployed Lambda function in AWS
 	@echo "Invoking deployed Lambda function..."
-	@$(DOCKER_COMPOSE) exec dev sh -c "FUNC_ARN=$$(/usr/bin/aws cloudformation describe-stacks --stack-name $${STACK_NAME:-weather-lambda-dev} --region $${AWS_REGION:-ap-northeast-1} --query 'Stacks[0].Outputs[?OutputKey==\`WeatherLambdaFunction\`].OutputValue' --output text) && echo \"Function ARN: \$$FUNC_ARN\" && /usr/bin/aws lambda invoke --region $${AWS_REGION:-ap-northeast-1} --function-name \"\$$FUNC_ARN\" response.json && cat response.json"
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && FUNC_ARN=$$(/usr/bin/aws cloudformation describe-stacks --stack-name \$$STACK_NAME --region \$$AWS_REGION --query 'Stacks[0].Outputs[?OutputKey==\`WeatherLambdaFunction\`].OutputValue' --output text) && echo \"Function ARN: \$$FUNC_ARN\" && /usr/bin/aws lambda invoke --region \$$AWS_REGION --function-name \"\$$FUNC_ARN\" response.json && cat response.json"
 
-test-history-api: ## Test the Weather History API endpoint
-	@echo "Testing Weather History API..."
-	@$(DOCKER_COMPOSE) exec dev sh -c "curl -s 'https://gdsfuvwsae.execute-api.ap-northeast-1.amazonaws.com/dev/weather/history?period=6h'"
+test-history-api: ## Test the Weather History API endpoint (requires API key)
+	@echo "Testing Weather History API with API key..."
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && echo \"Using API Key: \$$API_KEY_VALUE\" && curl -s -H \"X-API-Key: \$$API_KEY_VALUE\" \"\$$API_GATEWAY_URL/weather/history?period=6h\""
+
+test-history-api-no-auth: ## Test API without authentication (should fail with 403)
+	@echo "Testing Weather History API without API key (expecting 403)..."
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && curl -s -w \"HTTP Status: %{http_code}\n\" \"\$$API_GATEWAY_URL/weather/history?period=6h\""
+
+test-rate-limiting: ## Test API rate limiting (should show throttling after 10 requests/sec)
+	@echo "Testing rate limiting (10 requests/sec limit, 50 burst)..."
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && for i in \$$(seq 1 15); do echo \"Request \$$i:\"; curl -s -w \"HTTP Status: %{http_code}\n\" -H \"X-API-Key: \$$API_KEY_VALUE\" \"\$$API_GATEWAY_URL/weather/history?period=6h\" | head -1; done"
 
 test-aws-cli: ## Test AWS CLI in container
 	@echo "Testing AWS CLI..."
-	@$(DOCKER_COMPOSE) exec dev sh -c "/usr/bin/aws --version && /usr/bin/aws sts get-caller-identity --region ap-northeast-1"
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && /usr/bin/aws --version && /usr/bin/aws sts get-caller-identity --region \$$AWS_REGION"
 
 test-lambda-direct: ## Test Lambda function using known function name
 	@echo "Testing Lambda function directly..."
-	@$(DOCKER_COMPOSE) exec dev sh -c "/usr/bin/aws lambda invoke --region ap-northeast-1 --function-name weather-lambda-dev-WeatherLambdaFunction-1HqVODG3zZRh response.json && cat response.json"
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && FUNC_NAME=$$(/usr/bin/aws cloudformation describe-stacks --stack-name \$$STACK_NAME --region \$$AWS_REGION --query 'Stacks[0].Outputs[?OutputKey==\`WeatherLambdaFunction\`].OutputValue' --output text) && /usr/bin/aws lambda invoke --region \$$AWS_REGION --function-name \"\$$FUNC_NAME\" response.json && cat response.json"
+
+get-api-key: ## Get the API key for Weather History API
+	@echo "Retrieving API key from CloudFormation stack..."
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && echo \"API Key ID: \$$API_KEY_ID\" && echo \"API Key Value: \$$API_KEY_VALUE\""
+
+monitor-api-usage: ## Monitor API Gateway usage statistics
+	@echo "Monitoring API usage..."
+	@./scripts/validate-env.sh
+	@$(DOCKER_COMPOSE) exec dev sh -c ". ./.env && /usr/bin/aws apigateway get-usage --usage-plan-id \$$USAGE_PLAN_ID --start-date 2025-08-19 --end-date 2025-08-26 --region \$$AWS_REGION"
 
 sam-deploy: sam-build ## Deploy to AWS (guided)
 	@echo "Deploying to AWS with guided setup..."
